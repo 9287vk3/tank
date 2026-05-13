@@ -1,0 +1,710 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no">
+    <title>Танк в лабиринте: Дуэль с тенями</title>
+    <style>
+        * {
+            user-select: none;
+            -webkit-tap-highlight-color: transparent;
+        }
+
+        body {
+            background: linear-gradient(145deg, #0a1a1f 0%, #071217 100%);
+            min-height: 100vh;
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            font-family: 'Segoe UI', 'Courier New', 'Monaco', monospace;
+            margin: 0;
+            padding: 20px;
+        }
+
+        .game-container {
+            background: #1e2a2e;
+            border-radius: 48px;
+            padding: 20px 25px 25px 25px;
+            box-shadow: 0 20px 35px rgba(0, 0, 0, 0.5), inset 0 1px 0 rgba(255,255,255,0.1);
+        }
+
+        canvas {
+            display: block;
+            margin: 0 auto;
+            border-radius: 24px;
+            box-shadow: 0 10px 25px rgba(0,0,0,0.3), inset 0 0 0 2px rgba(255,215,150,0.3);
+            cursor: none;
+            background-color: #1e2f2c;
+        }
+
+        .info-panel {
+            display: flex;
+            justify-content: space-between;
+            align-items: baseline;
+            margin-bottom: 18px;
+            padding: 8px 20px;
+            background: #0d181c;
+            border-radius: 60px;
+            backdrop-filter: blur(2px);
+            box-shadow: inset 0 1px 3px rgba(0,0,0,0.5), 0 2px 4px rgba(0,0,0,0.2);
+        }
+
+        .lives {
+            display: flex;
+            gap: 12px;
+            align-items: center;
+            background: #020a0e;
+            padding: 5px 20px;
+            border-radius: 40px;
+        }
+
+        .life-icon {
+            font-size: 28px;
+            filter: drop-shadow(0 2px 2px rgba(0,0,0,0.4));
+            transition: 0.1s ease;
+        }
+
+        .life-icon.lost {
+            opacity: 0.25;
+            filter: grayscale(0.6);
+        }
+
+        .score-box {
+            background: #000000aa;
+            backdrop-filter: blur(4px);
+            padding: 5px 22px;
+            border-radius: 32px;
+            font-weight: bold;
+            font-size: 26px;
+            letter-spacing: 2px;
+            color: #f5cb5c;
+            text-shadow: 0 0 6px #ffb347;
+            font-family: monospace;
+        }
+
+        .score-label {
+            font-size: 14px;
+            text-transform: uppercase;
+            margin-right: 8px;
+            color: #9bb7b4;
+            letter-spacing: 1px;
+        }
+
+        .restart-btn {
+            background: #2c423f;
+            border: none;
+            font-size: 20px;
+            font-weight: bold;
+            padding: 4px 18px;
+            border-radius: 50px;
+            color: #ecd68f;
+            font-family: monospace;
+            cursor: pointer;
+            transition: 0.15s linear;
+            box-shadow: 0 2px 6px black;
+        }
+
+        .restart-btn:hover {
+            background: #4a6b66;
+            transform: scale(0.97);
+            color: #ffe0a3;
+        }
+
+        .controls-tip {
+            margin-top: 16px;
+            display: flex;
+            justify-content: center;
+            gap: 32px;
+            font-size: 14px;
+            background: #0b1519b3;
+            border-radius: 32px;
+            padding: 6px 18px;
+            width: fit-content;
+            margin-left: auto;
+            margin-right: auto;
+            backdrop-filter: blur(4px);
+            color: #bbd4ce;
+        }
+
+        .controls-tip span {
+            margin: 0 4px;
+            background: #161f22;
+            padding: 2px 12px;
+            border-radius: 30px;
+            font-weight: bold;
+            letter-spacing: 1px;
+        }
+    </style>
+</head>
+<body>
+<div>
+    <div class="game-container">
+        <div class="info-panel">
+            <div class="lives" id="livesContainer">
+                <!-- динамические сердечки/жизни -->
+            </div>
+            <div class="score-box">
+                <span class="score-label">⚡ УНИЧТОЖЕНО</span>
+                <span id="scoreValue">0</span>
+            </div>
+            <button class="restart-btn" id="restartButton">↺ РЕСТАРТ</button>
+        </div>
+        <canvas id="gameCanvas" width="900" height="600"></canvas>
+        <div class="controls-tip">
+            <span>⬆️ ⬇️ ⬅️ ➡️</span>  движение танка &nbsp;&nbsp;|&nbsp;&nbsp;
+            <span>␣ ПРОБЕЛ</span>  выстрел
+        </div>
+    </div>
+</div>
+
+<script>
+    (function(){
+        // ---------- НАСТРОЙКИ ----------
+        const canvas = document.getElementById('gameCanvas');
+        const ctx = canvas.getContext('2d');
+        
+        // Размеры карты (лабиринта)
+        const MAP_WIDTH = 30;   // клеток
+        const MAP_HEIGHT = 20;
+        const TILE_SIZE = 30;   // 30px на клетку -> canvas 900x600
+        
+        // Лабиринт: 0 - стена, 1 - коридор (дорога)
+        // создаём интересный лабиринт с широкими проходами, перекрестками, комнатками
+        // но без тупиков, чтобы враги и танк могли маневрировать
+        const baseMaze = Array(MAP_HEIGHT).fill().map(() => Array(MAP_WIDTH).fill(1));
+        
+        // Генерация стен по периметру
+        for(let i = 0; i < MAP_HEIGHT; i++){
+            baseMaze[i][0] = 0;
+            baseMaze[i][MAP_WIDTH-1] = 0;
+        }
+        for(let j = 0; j < MAP_WIDTH; j++){
+            baseMaze[0][j] = 0;
+            baseMaze[MAP_HEIGHT-1][j] = 0;
+        }
+        
+        // внутренние стены для создания коридоро-лабиринта
+        // вертикальные перегородки
+        for(let i = 2; i < MAP_HEIGHT-2; i+=4){
+            for(let j = 4; j < MAP_WIDTH-4; j+=5){
+                if(baseMaze[i][j] === 1 && Math.random() > 0.3) baseMaze[i][j] = 0;
+                if(i+1 < MAP_HEIGHT-1 && Math.random() > 0.6) baseMaze[i+1][j] = 0;
+            }
+        }
+        // горизонтальные перегородки
+        for(let j = 3; j < MAP_WIDTH-3; j+=4){
+            for(let i = 3; i < MAP_HEIGHT-3; i+=4){
+                if(baseMaze[i][j] === 1 && Math.random() > 0.4) baseMaze[i][j] = 0;
+                if(j+1 < MAP_WIDTH-1 && Math.random() > 0.7) baseMaze[i][j+1] = 0;
+            }
+        }
+        
+        // гарантируем проходимость центра и основных артерий
+        // делаем крест свободным
+        for(let i=1;i<MAP_HEIGHT-1;i++) baseMaze[i][Math.floor(MAP_WIDTH/2)] = 1;
+        for(let j=1;j<MAP_WIDTH-1;j++) baseMaze[Math.floor(MAP_HEIGHT/2)][j] = 1;
+        
+        // добавим еще живописных проходов, но чтобы не было изолированных зон
+        for(let i=0;i<80;i++){
+            let x = 2+Math.floor(Math.random()*(MAP_WIDTH-4));
+            let y = 2+Math.floor(Math.random()*(MAP_HEIGHT-4));
+            if(baseMaze[y][x] === 0 && Math.random()>0.4) baseMaze[y][x] = 1;
+        }
+        
+        // финальная проверка: удаляем одиночные стены-столбы для эстетики
+        for(let i=1;i<MAP_HEIGHT-1;i++){
+            for(let j=1;j<MAP_WIDTH-1;j++){
+                if(baseMaze[i][j] === 0){
+                    let wallCount = 0;
+                    if(baseMaze[i-1][j] === 0) wallCount++;
+                    if(baseMaze[i+1][j] === 0) wallCount++;
+                    if(baseMaze[i][j-1] === 0) wallCount++;
+                    if(baseMaze[i][j+1] === 0) wallCount++;
+                    if(wallCount >= 3 && Math.random()>0.3) baseMaze[i][j] = 1;
+                }
+            }
+        }
+        
+        const wallsMap = baseMaze; // 0 - стена, 1 - проход
+        
+        // ---------- ИГРОВЫЕ ОБЪЕКТЫ ----------
+        let tank = {
+            x: 2,           // клеточная позиция
+            y: 2,
+            angle: 0,       // 0=вправо, 90=вниз, 180=влево, 270=вверх (градусы)
+            lives: 3,
+            invincibleFrames: 0,   // неуязвимость после попадания (20 кадров)
+            respawnImmune: 30
+        };
+        
+        let enemies = [];   // враги (движущиеся предметы)
+        let bullets = [];   // пули
+        
+        let score = 0;
+        let gameOver = false;
+        let gameLoopId = null;
+        
+        // настройки врагов
+        const ENEMY_BASE_SPEED = 1.6;   // клеток в секунду (будем умножать на dt)
+        const TANK_SPEED = 3.2;
+        const BULLET_SPEED = 7.5;
+        const INVINCIBLE_DURATION = 0.65; // секунды
+        
+        // Вспомогательная функция: проверка столкновения танка с врагами
+        function checkTankCollisionWithEnemies(){
+            if(tank.invincibleFrames > 0 || gameOver) return false;
+            for(let i=0;i<enemies.length;i++){
+                const e = enemies[i];
+                // евклидово расстояние между центрами клеток (приблизительно)
+                const dx = tank.x - e.x;
+                const dy = tank.y - e.y;
+                const dist = Math.hypot(dx, dy);
+                if(dist < 0.85){ // столкновение на клеточном уровне
+                    // теряем жизнь
+                    tank.lives--;
+                    if(tank.lives <= 0){
+                        gameOver = true;
+                        tank.lives = 0;
+                        updateLivesUI();
+                        return true;
+                    }
+                    // отбрасываем врага немного, чтобы избежать зацикленной смерти
+                    // и даем неуязвимость
+                    tank.invincibleFrames = Math.ceil(INVINCIBLE_DURATION * 60);
+                    // телепортация врага в случайную дальную точку (чтобы не мучал сразу)
+                    relocateEnemyFar(i);
+                    updateLivesUI();
+                    return true;
+                }
+            }
+            return false;
+        }
+        
+        // отбросить врага подальше от танка
+        function relocateEnemyFar(index){
+            let enemy = enemies[index];
+            let safePlaces = [];
+            for(let i=0;i<30;i++){
+                let rx = 2 + Math.random() * (MAP_WIDTH-4);
+                let ry = 2 + Math.random() * (MAP_HEIGHT-4);
+                if(wallsMap[Math.floor(ry)][Math.floor(rx)] === 1){
+                    let dx = rx - tank.x;
+                    let dy = ry - tank.y;
+                    if(Math.hypot(dx,dy) > 4.0){
+                        safePlaces.push({x:rx, y:ry});
+                    }
+                }
+            }
+            if(safePlaces.length>0){
+                let place = safePlaces[0];
+                enemy.x = place.x;
+                enemy.y = place.y;
+            } else {
+                // просто сместим немного
+                enemy.x = (enemy.x + 3) % (MAP_WIDTH-2) + 1;
+                enemy.y = (enemy.y + 2) % (MAP_HEIGHT-2) + 1;
+                if(wallsMap[Math.floor(enemy.y)][Math.floor(enemy.x)] === 0) enemy.x = tank.x+1;
+            }
+            // корректировка
+            enemy.x = Math.min(MAP_WIDTH-1.1, Math.max(1, enemy.x));
+            enemy.y = Math.min(MAP_HEIGHT-1.1, Math.max(1, enemy.y));
+        }
+        
+        // стрельба
+        function shoot(){
+            if(gameOver) return;
+            // угол танка в радианах
+            let rad = tank.angle * Math.PI / 180;
+            // начальная позиция пули - из центра танка чуть смещённая по направлению
+            let offset = 0.65;
+            let startX = tank.x + Math.cos(rad) * offset;
+            let startY = tank.y + Math.sin(rad) * offset;
+            bullets.push({
+                x: startX,
+                y: startY,
+                vx: Math.cos(rad) * BULLET_SPEED,
+                vy: Math.sin(rad) * BULLET_SPEED,
+                life: true
+            });
+        }
+        
+        // обновление пуль и удаление врагов
+        function updateBullets(dt){
+            for(let i=0;i<bullets.length;i++){
+                let b = bullets[i];
+                b.x += b.vx * dt;
+                b.y += b.vy * dt;
+                // границы и стены
+                let gridX = Math.floor(b.x);
+                let gridY = Math.floor(b.y);
+                if(gridX < 0 || gridY < 0 || gridX >= MAP_WIDTH || gridY >= MAP_HEIGHT || wallsMap[gridY][gridX] === 0){
+                    bullets.splice(i,1);
+                    i--;
+                    continue;
+                }
+                let hit = false;
+                for(let j=0;j<enemies.length;j++){
+                    let e = enemies[j];
+                    if(Math.hypot(b.x - e.x, b.y - e.y) < 0.65){
+                        // уничтожение врага
+                        enemies.splice(j,1);
+                        hit = true;
+                        score++;
+                        updateScoreUI();
+                        break;
+                    }
+                }
+                if(hit){
+                    bullets.splice(i,1);
+                    i--;
+                }
+            }
+        }
+        
+        // обновление врагов: движение к танку + избегание стен
+        function updateEnemies(dt){
+            for(let i=0;i<enemies.length;i++){
+                let e = enemies[i];
+                // направление к танку
+                let dx = tank.x - e.x;
+                let dy = tank.y - e.y;
+                let len = Math.hypot(dx,dy);
+                if(len > 0.01){
+                    let move = ENEMY_BASE_SPEED * dt;
+                    let nx = dx/len;
+                    let ny = dy/len;
+                    let newX = e.x + nx * move;
+                    let newY = e.y + ny * move;
+                    // проверка стен (проходимость)
+                    let floorX = Math.floor(newX);
+                    let floorY = Math.floor(newY);
+                    let ceilX = Math.ceil(newX);
+                    let ceilY = Math.ceil(newY);
+                    let canMove = true;
+                    if(wallsMap[Math.floor(e.y)][floorX] === 0 && (Math.abs(newX - floorX) < 0.2)) canMove = false;
+                    if(wallsMap[floorY][Math.floor(e.x)] === 0 && (Math.abs(newY - floorY) < 0.2)) canMove = false;
+                    if(wallsMap[floorY][floorX] === 0) canMove = false;
+                    if(wallsMap[ceilY][ceilX] === 0 && (newX - floorX > 0.7 || newY - floorY >0.7)) canMove = false;
+                    // дополнительная проверка центральных позиций
+                    if(wallsMap[Math.floor(newY)][Math.floor(newX)] === 0) canMove = false;
+                    if(wallsMap[Math.floor(newY)][Math.ceil(newX)] === 0 && (newX - Math.floor(newX) > 0.4)) canMove = false;
+                    if(wallsMap[Math.ceil(newY)][Math.floor(newX)] === 0 && (newY - Math.floor(newY) > 0.4)) canMove = false;
+                    
+                    if(canMove){
+                        e.x = newX;
+                        e.y = newY;
+                    } else {
+                        // скольжение вдоль стены - частичная корректировка
+                        let tryX = e.x + nx * move;
+                        if(wallsMap[Math.floor(e.y)][Math.floor(tryX)] === 1 && wallsMap[Math.floor(e.y)][Math.ceil(tryX)] !== 0)
+                            e.x = tryX;
+                        let tryY = e.y + ny * move;
+                        if(wallsMap[Math.floor(tryY)][Math.floor(e.x)] === 1 && wallsMap[Math.ceil(tryY)][Math.floor(e.x)] !== 0)
+                            e.y = tryY;
+                    }
+                }
+                // границы лабиринта
+                e.x = Math.min(MAP_WIDTH-1.05, Math.max(1.05, e.x));
+                e.y = Math.min(MAP_HEIGHT-1.05, Math.max(1.05, e.y));
+            }
+        }
+        
+        // движение танка (стрелки)
+        let keys = { ArrowUp: false, ArrowDown: false, ArrowLeft: false, ArrowRight: false };
+        function handleTankMovement(dt){
+            if(gameOver) return;
+            let move = 0;
+            let rot = 0;
+            if(keys.ArrowUp) move = 1;
+            if(keys.ArrowDown) move = -1;
+            if(keys.ArrowLeft) rot = -1;
+            if(keys.ArrowRight) rot = 1;
+            
+            if(rot !== 0){
+                tank.angle += rot * 210 * dt;   // градусов в секунду
+                tank.angle = (tank.angle + 360) % 360;
+            }
+            if(move !== 0){
+                let rad = tank.angle * Math.PI / 180;
+                let step = TANK_SPEED * dt * move;
+                let newX = tank.x + Math.cos(rad) * step;
+                let newY = tank.y + Math.sin(rad) * step;
+                // проверка столкновения со стенами
+                let can = true;
+                let ix = Math.floor(newX);
+                let iy = Math.floor(newY);
+                if(ix<1 || iy<1 || ix>=MAP_WIDTH-1 || iy>=MAP_HEIGHT-1) can=false;
+                else if(wallsMap[iy][ix] === 0) can=false;
+                else if(wallsMap[Math.floor(tank.y)][ix] === 0 && Math.abs(newX - ix) < 0.25) can=false;
+                else if(wallsMap[iy][Math.floor(tank.x)] === 0 && Math.abs(newY - iy) < 0.25) can=false;
+                if(can){
+                    tank.x = newX;
+                    tank.y = newY;
+                } else {
+                    // попытка скольжения по X
+                    let tryX = tank.x + Math.cos(rad) * step;
+                    let ix2 = Math.floor(tryX);
+                    if(wallsMap[Math.floor(tank.y)][ix2] === 1 && ix2>0 && ix2<MAP_WIDTH-1) tank.x = tryX;
+                    let tryY = tank.y + Math.sin(rad) * step;
+                    let iy2 = Math.floor(tryY);
+                    if(wallsMap[iy2][Math.floor(tank.x)] === 1 && iy2>0 && iy2<MAP_HEIGHT-1) tank.y = tryY;
+                }
+                // фикс границ
+                tank.x = Math.min(MAP_WIDTH-1.05, Math.max(1.05, tank.x));
+                tank.y = Math.min(MAP_HEIGHT-1.05, Math.max(1.05, tank.y));
+            }
+        }
+        
+        function updateInvincibility(dt){
+            if(tank.invincibleFrames > 0){
+                tank.invincibleFrames -= 1;
+                if(tank.invincibleFrames < 0) tank.invincibleFrames = 0;
+            }
+        }
+        
+        // спавн врагов, минимум 5, с учётом счета
+        let spawnCounter = 0;
+        function manageEnemies(dt){
+            spawnCounter += dt;
+            let targetCount = Math.min(8, 3 + Math.floor(score / 12));
+            while(enemies.length < targetCount && spawnCounter > 0.45){
+                spawnCounter -= 0.45;
+                let free = false;
+                let spawnX, spawnY;
+                for(let attempt=0; attempt<40; attempt++){
+                    let rx = 3 + Math.random() * (MAP_WIDTH-6);
+                    let ry = 3 + Math.random() * (MAP_HEIGHT-6);
+                    if(wallsMap[Math.floor(ry)][Math.floor(rx)] === 1 && Math.hypot(rx - tank.x, ry - tank.y) > 3.5){
+                        spawnX = rx;
+                        spawnY = ry;
+                        free = true;
+                        break;
+                    }
+                }
+                if(!free){
+                    spawnX = MAP_WIDTH/2;
+                    spawnY = MAP_HEIGHT/2;
+                }
+                enemies.push({
+                    x: spawnX,
+                    y: spawnY,
+                });
+            }
+            if(gameOver) return;
+        }
+        
+        // ------ ОТРИСОВКА (красивая) ------
+        function draw(){
+            if(!ctx) return;
+            ctx.clearRect(0,0,canvas.width,canvas.height);
+            // фон коридоров
+            for(let i=0;i<MAP_HEIGHT;i++){
+                for(let j=0;j<MAP_WIDTH;j++){
+                    let x = j*TILE_SIZE;
+                    let y = i*TILE_SIZE;
+                    if(wallsMap[i][j] === 0){
+                        // стены с текстурой
+                        ctx.fillStyle = '#2c3e2f';
+                        ctx.fillRect(x,y,TILE_SIZE-0.5,TILE_SIZE-0.5);
+                        ctx.fillStyle = '#1e2a1b';
+                        ctx.fillRect(x+2,y+2,TILE_SIZE-4,TILE_SIZE-4);
+                        ctx.fillStyle = '#3f5840';
+                        ctx.fillRect(x+4,y+4,TILE_SIZE-8,TILE_SIZE-8);
+                    } else {
+                        // пол с текстурой металлической сетки
+                        let grad = ctx.createLinearGradient(x,y,x+TILE_SIZE,y+TILE_SIZE);
+                        grad.addColorStop(0,'#4a6652');
+                        grad.addColorStop(1,'#395041');
+                        ctx.fillStyle = grad;
+                        ctx.fillRect(x,y,TILE_SIZE-0.5,TILE_SIZE-0.5);
+                        ctx.strokeStyle = '#6f917a';
+                        ctx.lineWidth = 0.7;
+                        ctx.strokeRect(x+1,y+1,TILE_SIZE-3,TILE_SIZE-3);
+                        ctx.fillStyle = '#7ea08330';
+                        ctx.fillRect(x+4,y+4,TILE_SIZE-8,TILE_SIZE-8);
+                    }
+                }
+            }
+            // враги (красные агрессивные сферы с "глазами")
+            for(let e of enemies){
+                let cx = e.x * TILE_SIZE;
+                let cy = e.y * TILE_SIZE;
+                ctx.shadowBlur = 8;
+                ctx.shadowColor = '#a00';
+                ctx.beginPath();
+                ctx.arc(cx, cy, TILE_SIZE*0.4, 0, Math.PI*2);
+                ctx.fillStyle = '#bc3f2e';
+                ctx.fill();
+                ctx.beginPath();
+                ctx.arc(cx-5, cy-4, 4, 0, Math.PI*2);
+                ctx.fillStyle = '#f5e6d3';
+                ctx.fill();
+                ctx.beginPath();
+                ctx.arc(cx+5, cy-4, 4, 0, Math.PI*2);
+                ctx.fill();
+                ctx.fillStyle = '#000';
+                ctx.beginPath();
+                ctx.arc(cx-6, cy-5, 1.7, 0, Math.PI*2);
+                ctx.fill();
+                ctx.beginPath();
+                ctx.arc(cx+4, cy-5, 1.7, 0, Math.PI*2);
+                ctx.fill();
+                ctx.fillStyle = '#ff6644';
+                ctx.beginPath();
+                ctx.ellipse(cx, cy+2, 6, 3, 0, 0, Math.PI*2);
+                ctx.fill();
+                ctx.shadowBlur = 0;
+            }
+            
+            // танк (бронетехника)
+            let tx = tank.x * TILE_SIZE;
+            let ty = tank.y * TILE_SIZE;
+            ctx.save();
+            ctx.translate(tx, ty);
+            ctx.rotate(tank.angle * Math.PI/180);
+            ctx.shadowBlur = 4;
+            ctx.fillStyle = '#3b6e47';
+            ctx.fillRect(-12, -10, 24, 20);
+            ctx.fillStyle = '#5f8b60';
+            ctx.fillRect(-14, -7, 28, 14);
+            ctx.fillStyle = '#2c543a';
+            ctx.fillRect(-6, -14, 12, 10);
+            ctx.beginPath();
+            ctx.arc(12, 0, 7, 0, Math.PI*2);
+            ctx.fillStyle = '#796545';
+            ctx.fill();
+            ctx.fillStyle = '#b87c3a';
+            ctx.fillRect(8, -3, 9, 6);
+            if(tank.invincibleFrames > 0 && (Math.floor(Date.now()/50)%3 === 0)){
+                ctx.fillStyle = '#ffffa0';
+                ctx.globalAlpha = 0.6;
+                ctx.fillRect(-14, -12, 28, 24);
+                ctx.globalAlpha = 1;
+            }
+            ctx.restore();
+            
+            // пули
+            for(let b of bullets){
+                ctx.beginPath();
+                ctx.arc(b.x*TILE_SIZE, b.y*TILE_SIZE, 5, 0, Math.PI*2);
+                ctx.fillStyle = '#ffcf4a';
+                ctx.shadowBlur = 8;
+                ctx.fill();
+                ctx.fillStyle = '#f80';
+                ctx.beginPath();
+                ctx.arc(b.x*TILE_SIZE, b.y*TILE_SIZE, 2, 0, Math.PI*2);
+                ctx.fill();
+            }
+            ctx.shadowBlur = 0;
+            
+            // эффект game over
+            if(gameOver){
+                ctx.font = 'bold 38monospace';
+                ctx.shadowBlur = 0;
+                ctx.fillStyle = '#dd8866';
+                ctx.shadowColor = 'black';
+                ctx.fillText('GAME OVER', canvas.width/2-120, canvas.height/2-40);
+                ctx.font = '18px monospace';
+                ctx.fillStyle = '#efcd96';
+                ctx.fillText('нажмите "РЕСТАРТ"', canvas.width/2-110, canvas.height/2+30);
+            }
+        }
+        
+        let lastTimestamp = 0;
+        let lastShootFrame = 0;
+        const SHOOT_DELAY_FRAMES = 12; // кадры между выстрелами
+        
+        function gameUpdate(now){
+            if(!lastTimestamp) lastTimestamp = now;
+            let dt = Math.min(0.033, (now - lastTimestamp) / 1000);
+            if(dt <= 0) { lastTimestamp = now; requestAnimationFrame(gameUpdate); return; }
+            lastTimestamp = now;
+            
+            if(!gameOver){
+                handleTankMovement(dt);
+                updateEnemies(dt);
+                updateBullets(dt);
+                updateInvincibility(dt);
+                manageEnemies(dt);
+                checkTankCollisionWithEnemies();
+                // ограничение частоты выстрелов (пробел)
+                if(shootRequest && (now - lastShootFrame) > SHOOT_DELAY_FRAMES * 16){
+                    shoot();
+                    lastShootFrame = now;
+                    shootRequest = false;
+                }
+            }
+            draw();
+            requestAnimationFrame(gameUpdate);
+        }
+        
+        let shootRequest = false;
+        function handleKeyDown(e){
+            if(e.key === ' ' || e.key === 'Space'){
+                e.preventDefault();
+                if(!gameOver){
+                    shootRequest = true;
+                }
+                return;
+            }
+            if(keys.hasOwnProperty(e.key)) {
+                keys[e.key] = true;
+                e.preventDefault();
+            }
+        }
+        
+        function handleKeyUp(e){
+            if(keys.hasOwnProperty(e.key)) {
+                keys[e.key] = false;
+                e.preventDefault();
+            }
+        }
+        
+        function restartGame(){
+            gameOver = false;
+            tank = {
+                x: 2, y: 2, angle: 0, lives: 3, invincibleFrames: 30, respawnImmune:0
+            };
+            enemies = [];
+            bullets = [];
+            score = 0;
+            spawnCounter = 0;
+            for(let i=0;i<4;i++){ // начальные враги
+                let rx = 7 + Math.random() * (MAP_WIDTH-10);
+                let ry = 5 + Math.random() * (MAP_HEIGHT-8);
+                if(wallsMap[Math.floor(ry)][Math.floor(rx)] === 0) {rx=MAP_WIDTH/2; ry=MAP_HEIGHT/2;}
+                enemies.push({x: rx, y: ry});
+            }
+            updateLivesUI();
+            updateScoreUI();
+            shootRequest = false;
+        }
+        
+        function updateLivesUI(){
+            const container = document.getElementById('livesContainer');
+            container.innerHTML = '';
+            for(let i=0;i<3;i++){
+                let span = document.createElement('span');
+                span.className = 'life-icon' + (i >= tank.lives ? ' lost' : '');
+                span.innerHTML = i < tank.lives ? '❤️' : '🖤';
+                container.appendChild(span);
+            }
+        }
+        
+        function updateScoreUI(){
+            document.getElementById('scoreValue').innerText = score;
+        }
+        
+        window.addEventListener('keydown', handleKeyDown);
+        window.addEventListener('keyup', handleKeyUp);
+        document.getElementById('restartButton').addEventListener('click', ()=>{
+            restartGame();
+        });
+        
+        restartGame(); // инициализация
+        updateLivesUI();
+        requestAnimationFrame(gameUpdate);
+    })();
+</script>
+</body>
+</html>
